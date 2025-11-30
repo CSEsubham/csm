@@ -15,13 +15,32 @@ from langchain.chains import LLMChain
 from langchain.memory import ConversationBufferMemory
 from langchain.llms.base import LLM
 
+# ---------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="BabySisting API (Groq + ElevenLabs)")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ============================================================
-# 1. GROQ CONFIG (LLM)
+# 1. GROQ CONFIG
 # ============================================================
 
-#GROQ_API_KEY = "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"
-#GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_API_KEY = "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"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.1-8b-instant"
 
 
@@ -34,7 +53,6 @@ class GroqLLM(LLM):
         return "groq_custom"
 
     def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
-
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -126,15 +144,8 @@ chain = LLMChain(llm=llm, prompt=prompt, memory=memory)
 
 
 # ============================================================
-# 6. FASTAPI APP
+# 6. MODELS FOR CHAT
 # ============================================================
-
-app = FastAPI(title="BabySisting API (Groq + ElevenLabs)")
-
-
-# ---------------------------
-# CHAT MODELS
-# ---------------------------
 
 class ChatRequest(BaseModel):
     user_id: str = "default"
@@ -146,7 +157,7 @@ class ChatResponse(BaseModel):
 
 
 # ============================================================
-# 7. /chat — Text Chat with RAG + Memory
+# 7. /chat — Text Chat with RAG
 # ============================================================
 
 @app.post("/chat", response_model=ChatResponse)
@@ -168,8 +179,8 @@ def chat(req: ChatRequest):
 # 8. ElevenLabs TTS (Text → Speech)
 # ============================================================
 
-#ELEVEN_API_KEY = "sk_aa63d4c3c133bd1de19c4f6c01406cc856867bf3131595f6"
-#ELEVEN_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Bella voice
+ELEVEN_API_KEY = "sk_aa63d4c3c133bd1de19c4f6c01406cc856867bf3131595f6"
+ELEVEN_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Bella
 
 class TTSRequest(BaseModel):
     text: str
@@ -177,26 +188,24 @@ class TTSRequest(BaseModel):
 
 @app.post("/tts")
 def text_to_speech(req: TTSRequest):
-    text = req.text
-
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE_ID}"
 
-    headers = {
-        "Accept": "audio/mpeg",
-        "xi-api-key": ELEVEN_API_KEY,
-        "Content-Type": "application/json"
-    }
-
     payload = {
-        "text": text,
+        "text": req.text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.4,
-            "similarity_boost": 0.8
-        }
+        "voice_settings": {"stability": 0.4, "similarity_boost": 0.8},
     }
 
-    res = requests.post(url, headers=headers, json=payload, stream=True)
+    res = requests.post(
+        url,
+        headers={
+            "Accept": "audio/mpeg",
+            "xi-api-key": ELEVEN_API_KEY,
+            "Content-Type": "application/json"
+        },
+        json=payload,
+        stream=True
+    )
 
     if res.status_code != 200:
         raise HTTPException(status_code=500, detail=res.text)
@@ -210,18 +219,11 @@ def text_to_speech(req: TTSRequest):
 
 @app.post("/stt")
 def speech_to_text(file: UploadFile):
-
-    headers = {"xi-api-key": ELEVEN_API_KEY}
-
-    files = {"file": (file.filename, file.file, file.content_type)}
-
-    data = {"model_id": "scribe_v2"}   # FIXED MODEL
-
     res = requests.post(
         "https://api.elevenlabs.io/v1/speech-to-text",
-        headers=headers,
-        files=files,
-        data=data
+        headers={"xi-api-key": ELEVEN_API_KEY},
+        files={"file": (file.filename, file.file, file.content_type)},
+        data={"model_id": "scribe_v2"}  # REQUIRED
     )
 
     if res.status_code != 200:
@@ -231,20 +233,13 @@ def speech_to_text(file: UploadFile):
 
 
 # ============================================================
-# 10. FULL VOICE CHAT PIPELINE
+# 10. FULL VOICE CHAT PIPELINE (STT → LLM → TTS)
 # ============================================================
 
 @app.post("/voice-chat")
 def voice_chat(file: UploadFile):
-    """
-    1. Speech → Text (STT)
-    2. Text → LLM Answer
-    3. Answer → Speech (TTS)
-    """
 
-    # -----------------------
-    # STT
-    # -----------------------
+    # 1. Speech → Text
     stt_res = requests.post(
         "https://api.elevenlabs.io/v1/speech-to-text",
         headers={"xi-api-key": ELEVEN_API_KEY},
@@ -260,17 +255,12 @@ def voice_chat(file: UploadFile):
     if not user_text:
         raise HTTPException(status_code=400, detail="Speech could not be transcribed.")
 
-    # -----------------------
-    # LLM
-    # -----------------------
+    # 2. LLM
     ctx_docs = retriever.search(user_text)
     context = "\n".join(ctx_docs) if ctx_docs else "No relevant FAQ found."
-
     answer_text = chain.run(context=context, question=user_text)
 
-    # -----------------------
-    # TTS
-    # -----------------------
+    # 3. Text → Speech
     tts_res = requests.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE_ID}",
         headers={
