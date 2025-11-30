@@ -5,8 +5,8 @@ import requests
 import numpy as np
 from typing import Optional, List, Dict
 
-from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, UploadFile, Response
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -16,24 +16,38 @@ from langchain.memory import ConversationBufferMemory
 from langchain.llms.base import LLM
 
 # ---------------------------------------------------------------
-# CORS
+# FULL CORS + ACCESS CONTROL
 # ---------------------------------------------------------------
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="BabySisting API (Groq + ElevenLabs)")
 
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "*",  # allow everything (optional)
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+# Add access-control headers to every outgoing response
+@app.middleware("http")
+async def add_cors_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
 
 # ============================================================
 # 1. GROQ CONFIG
@@ -144,7 +158,7 @@ chain = LLMChain(llm=llm, prompt=prompt, memory=memory)
 
 
 # ============================================================
-# 6. MODELS FOR CHAT
+# 6. MODELS
 # ============================================================
 
 class ChatRequest(BaseModel):
@@ -157,7 +171,7 @@ class ChatResponse(BaseModel):
 
 
 # ============================================================
-# 7. /chat — Text Chat with RAG
+# 7. /chat — TEXT CHAT ENDPOINT
 # ============================================================
 
 @app.post("/chat", response_model=ChatResponse)
@@ -176,11 +190,11 @@ def chat(req: ChatRequest):
 
 
 # ============================================================
-# 8. ElevenLabs TTS (Text → Speech)
+# 8. TTS (TEXT → AUDIO)
 # ============================================================
 
 ELEVEN_API_KEY = "sk_aa63d4c3c133bd1de19c4f6c01406cc856867bf3131595f6"
-ELEVEN_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Bella
+ELEVEN_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
 
 class TTSRequest(BaseModel):
     text: str
@@ -214,7 +228,7 @@ def text_to_speech(req: TTSRequest):
 
 
 # ============================================================
-# 9. ElevenLabs STT (Speech → Text)
+# 9. STT (AUDIO → TEXT)
 # ============================================================
 
 @app.post("/stt")
@@ -223,7 +237,7 @@ def speech_to_text(file: UploadFile):
         "https://api.elevenlabs.io/v1/speech-to-text",
         headers={"xi-api-key": ELEVEN_API_KEY},
         files={"file": (file.filename, file.file, file.content_type)},
-        data={"model_id": "scribe_v2"}  # REQUIRED
+        data={"model_id": "scribe_v2"}
     )
 
     if res.status_code != 200:
@@ -238,8 +252,7 @@ def speech_to_text(file: UploadFile):
 
 @app.post("/voice-chat")
 def voice_chat(file: UploadFile):
-
-    # 1. Speech → Text
+    # ========== 1. STT ==========
     stt_res = requests.post(
         "https://api.elevenlabs.io/v1/speech-to-text",
         headers={"xi-api-key": ELEVEN_API_KEY},
@@ -251,16 +264,15 @@ def voice_chat(file: UploadFile):
         raise HTTPException(status_code=500, detail=stt_res.text)
 
     user_text = stt_res.json().get("text", "").strip()
-
     if not user_text:
-        raise HTTPException(status_code=400, detail="Speech could not be transcribed.")
+        raise HTTPException(status_code=400, detail="Speech transcription failed.")
 
-    # 2. LLM
+    # ========== 2. LLM ==========
     ctx_docs = retriever.search(user_text)
     context = "\n".join(ctx_docs) if ctx_docs else "No relevant FAQ found."
     answer_text = chain.run(context=context, question=user_text)
 
-    # 3. Text → Speech
+    # ========== 3. TTS ==========
     tts_res = requests.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE_ID}",
         headers={
