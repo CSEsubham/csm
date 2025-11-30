@@ -18,9 +18,9 @@ from langchain.llms.base import LLM
 # =============================
 # 1. GROQ CONFIG
 # =============================
-GROQ_API_KEY = "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"
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_API_KEY = ""
+#GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+#GROQ_MODEL = "llama-3.1-8b-instant"
 
 
 # =============================
@@ -162,9 +162,9 @@ def chat(req: ChatRequest):
 # =============================
 # 9. TTS (ElevenLabs - Bella voice)
 # =============================
-ELEVEN_API_KEY = "sk_762251e649d6248e2d90be8cb29c830b1f24c04ea1d50aec"
-ELEVEN_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Bella
-ELEVEN_URL = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE_ID}/stream"
+ELEVEN_API_KEY = ""
+#ELEVEN_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Bella
+#ELEVEN_URL = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE_ID}/stream"
 
 
 @app.post("/tts")
